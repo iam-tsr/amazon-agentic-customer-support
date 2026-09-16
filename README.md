@@ -129,7 +129,7 @@ Triggers evaluation against test datasets (`test_data.jsonl`) to benchmark inten
 
 ## Benchmark Results
 
-Evaluation results from the test suite ([`tests/evaluation_report.json`](tests/evaluation_report.json)) across **100 evaluated customer query test samples**:
+Evaluation results from the test suite ([`iam-tsr/amazon-customer-support`](https://huggingface.co/datasets/iam-tsr/amazon-customer-support)) across **100 evaluated customer query test samples**:
 
 | Metric | Score | Passed / Total | Description |
 |---|:---:|:---:|---|
