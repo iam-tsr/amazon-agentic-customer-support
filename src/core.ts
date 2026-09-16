@@ -1,21 +1,3 @@
-/**
- * Amazon Customer Support Agent — Pipeline Core
- *
- * Architecture (from diagram):
- *   User Input
- *     └─► Intent Classification (ML model — first turn only)
- *     └─► Guardrail
- *           ├─ BLOCKED / SCOPE_NOTICE ──► LR:intent (predefined prompt) ──► Response
- *           └─ PASS / GREETING
- *                 └─► Retrieve (vector store from customer_query.json)
- *                       └─► LLM as Judge (reliable?)
- *                             ├─ Reliable ──────────────► Response (action: resolve)
- *                             └─ Not reliable ──────────► Escalate to human
- *   Response ──► Chat History (per session)
- *
- * POST /end-chat  →  returns structured session summary
- */
-
 import { Document } from "@langchain/core/documents";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
@@ -24,33 +6,36 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { classifyUserInput } from "./guardrail.js";
 import { VectorStore } from "./vectorstore.js";
 import { ONNXEmbed } from "./embed.js";
-import { SYSTEM_PROMPT, LR_INTENT_PROMPT, JUDGE_PROMPT } from "./prompt.js";
+import { SYSTEM_PROMPT, PREDEFINED_PROMPT, JUDGE_PROMPT, JUDGE_KNOWLEDGE_PROMPT } from "./support/prompt.js";
 
 import customerQueryDataset from "./dataset/customer_query.json";
 
-// ===========================================================================
-// Config
-// ===========================================================================
+
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL;
 const OPENAI_MODEL = process.env.OPENAI_MODEL;
 
-// ===========================================================================
-// LLM client (shared, stateless)
-// ===========================================================================
-
-const llm = new ChatOpenAI({
+try {
+    if (!OPENAI_API_KEY) throw new Error("Missing OPENAI_API_KEY");
+    if (!OPENAI_API_BASE_URL) throw new Error("Missing OPENAI_API_BASE_URL");
+    if (!OPENAI_MODEL) throw new Error("Missing OPENAI_MODEL");
+} catch (err) {
+    console.error("[config] LLM client configuration error:", err);
+    process.exit(1);
+}
+const openai = new ChatOpenAI({
     openAIApiKey: OPENAI_API_KEY,
-    configuration: { baseURL: OPENAI_API_BASE_URL },
+    configuration: {
+        baseURL: OPENAI_API_BASE_URL,
+    },
     modelName: OPENAI_MODEL,
     temperature: 0.3,
+    maxRetries: 2,
 });
 
-// ===========================================================================
-// In-memory vector store (loaded once at startup)
-// ===========================================================================
 
+// In-memory vector store (loaded once at startup)
 type QueryEntry = { query: string; response: string };
 
 export const vectorStore = new VectorStore(new ONNXEmbed());
@@ -70,17 +55,14 @@ export async function loadDatasetIntoVectorStore(): Promise<void> {
     console.log(`[startup] Vector store ready — ${vectorStore.memoryVectors.length} vectors indexed.`);
 }
 
-// ===========================================================================
 // Session state
-// ===========================================================================
-
 export type Intent = "complaint" | "question" | "positive" | "other" | "unknown";
 export type Action = "resolve" | "escalate_to_human";
 
 export interface SessionState {
     /** Full chat history (system + human + AI messages) */
     history: BaseMessage[];
-    /** ML-classified intent from the first user message */
+    /** ML-classified intent from LR model (set after guardrail passes) */
     intent: Intent;
     /** Final action taken in the last pipeline run */
     lastAction: Action;
@@ -99,14 +81,13 @@ function getSession(sessionId: string): SessionState {
     return sessions.get(sessionId)!;
 }
 
-// ===========================================================================
-// Intent classification (ML model via Python subprocess)
-// ===========================================================================
+// Intent classification via Logistic Regression (ML model — Python subprocess)
 
 /**
  * Runs the sklearn TF-IDF + LogisticRegression model (tweet_classify.joblib)
  * as a Python3.11 subprocess and returns the predicted intent label.
- * Only called on the FIRST message of a new session.
+ * Called after the Guardrail passes (PASS / GREETING), on every turn so that
+ * the intent reflects the most recent user message.
  */
 async function classifyIntent(text: string): Promise<Intent> {
     try {
@@ -125,16 +106,58 @@ async function classifyIntent(text: string): Promise<Intent> {
     }
 }
 
-// ===========================================================================
-// Pipeline steps
-// ===========================================================================
+/**
+ * Judge 1 — decide whether the query can be answered directly or
+ * requires retrieval from the knowledge base.
+ * Returns true  → direct answer (no RAG needed)
+ * Returns false → require knowledge (proceed to retrieval + Judge 2)
+ */
+async function judgeNeedsKnowledge(
+    userMessage: string,
+    intent: Intent,
+    history: BaseMessage[]
+): Promise<boolean> {
+    const judgeMessages = [
+        new SystemMessage(JUDGE_KNOWLEDGE_PROMPT),
+        ...history.filter((m) => !(m instanceof SystemMessage)),
+        new HumanMessage(
+            `Customer intent: ${intent}\nCustomer message: "${userMessage}"\n\nDoes answering this query require looking up specific knowledge (order details, policies, product info, etc.)? Reply ONLY with "REQUIRES_KNOWLEDGE" or "DIRECT_ANSWER".`
+        ),
+    ];
 
-/** Step: Retrieve top-k similar Q&A pairs from the vector store */
+    const judgeResponse = await openai.invoke(judgeMessages);
+    const verdict = String(judgeResponse.content).trim().toUpperCase();
+    return verdict.startsWith("REQUIRES_KNOWLEDGE");
+}
+
+// Generate a direct answer using only chat history (no RAG)
+async function generateDirectAnswer(
+    userMessage: string,
+    intent: Intent,
+    history: BaseMessage[]
+): Promise<string> {
+    const messages = [
+        ...history,
+        new HumanMessage(
+            `Customer intent: ${intent}\nCustomer message: ${userMessage}\n\nPlease provide a concise, helpful response.`
+        ),
+    ];
+
+    const response = await openai.invoke(messages);
+    return String(response.content).trim();
+}
+
+// Retrieve top-k similar Q&A pairs from the vector store
 async function retrieve(userMessage: string, k = 3): Promise<Array<[Document, number]>> {
     return vectorStore.similaritySearchWithScore(userMessage, k);
 }
 
-/** Step: LLM as Judge — decide if retrieved docs are reliable */
+/**
+ * Judge 2 — LLM as Judge — decide if retrieved docs are reliable enough
+ * to generate a grounded answer.
+ * Returns true  → reliable (generate output)
+ * Returns false → not reliable (escalate to human)
+ */
 async function judgeReliability(
     userMessage: string,
     retrievedDocs: Array<[Document, number]>
@@ -153,12 +176,12 @@ async function judgeReliability(
         ),
     ];
 
-    const judgeResponse = await llm.invoke(judgeMessages);
+    const judgeResponse = await openai.invoke(judgeMessages);
     const verdict = String(judgeResponse.content).trim().toUpperCase();
     return verdict.startsWith("RELIABLE");
 }
 
-/** Step: Generate response using retrieved context */
+// Generate response using retrieved context (RAG output)
 async function generateWithContext(
     userMessage: string,
     retrievedDocs: Array<[Document, number]>,
@@ -178,12 +201,12 @@ async function generateWithContext(
         ),
     ];
 
-    const response = await llm.invoke(messages);
+    const response = await openai.invoke(messages);
     return String(response.content).trim();
 }
 
-/** Step: Off-topic / blocked — uses LR:intent predefined prompt */
-async function generateLRIntentResponse(
+// Blocked / out-of-scope — uses pre-defined prompt (no LLM for hard blocks)
+async function generatePredefinedResponse(
     userMessage: string,
     reason: string,
     history: BaseMessage[]
@@ -194,23 +217,21 @@ async function generateLRIntentResponse(
     }
 
     const messages = [
-        new SystemMessage(LR_INTENT_PROMPT),
+        new SystemMessage(PREDEFINED_PROMPT),
         ...history.filter((m) => !(m instanceof SystemMessage)),
         new HumanMessage(userMessage),
     ];
 
-    const response = await llm.invoke(messages);
+    const response = await openai.invoke(messages);
     return String(response.content).trim();
 }
 
-// ===========================================================================
-// Pipeline result types
-// ===========================================================================
 
 export interface ChatResult {
     sessionId: string;
     intent: Intent;
     action: Action;
+    response: string;
 }
 
 export interface SessionSummary {
@@ -219,59 +240,67 @@ export interface SessionSummary {
     conversation: Array<{ role: "human" | "ai"; content: string }>;
 }
 
-// ===========================================================================
-// Main pipeline
-// ===========================================================================
-
 export async function runPipeline(userMessage: string, sessionId: string): Promise<ChatResult> {
     const session = getSession(sessionId);
     const { history } = session;
 
-    // --- Step 0: Intent classification (ML model, first turn only) ---
-    const isFirstTurn = session.intent === "unknown";
-    if (isFirstTurn) {
-        session.intent = await classifyIntent(userMessage);
-        console.log(`[${sessionId}] intent: ${session.intent}`);
-    }
+    let responseText: string;
+    let action: Action;
 
-    // --- Step 1: Guardrail ---
+    // Guardrail
     const verdict = await classifyUserInput(userMessage);
     console.log(`[${sessionId}] guardrail: ${verdict.kind}`);
 
-    let action: Action;
-
     if (verdict.kind === "BLOCKED" || verdict.kind === "SCOPE_NOTICE") {
-        // LR:intent branch
+        // Pre-defined prompt (blocked / out-of-scope)
         const reason = verdict.kind === "BLOCKED" ? verdict.reason : "scope_notice";
-        // Blocked queries are handled inline by the agent — not escalated
+        responseText = await generatePredefinedResponse(userMessage, reason, history);
         action = "resolve";
+        console.log(`[${sessionId}] branch: predefined-prompt (${reason})`);
     } else {
-        // PASS or GREETING — go through RAG pipeline
-        const retrievedDocs = await retrieve(userMessage);
-        console.log(`[${sessionId}] retrieved ${retrievedDocs.length} docs`);
+        // LR intent classification
+        session.intent = await classifyIntent(userMessage);
+        console.log(`[${sessionId}] intent (LR): ${session.intent}`);
 
-        // --- LLM as Judge ---
-        const reliable = await judgeReliability(userMessage, retrievedDocs);
-        console.log(`[${sessionId}] judge: ${reliable ? "RELIABLE" : "NOT_RELIABLE"}`);
+        // Judge 1 — direct answer vs. require knowledge
+        const requiresKnowledge = await judgeNeedsKnowledge(userMessage, session.intent, history);
+        console.log(`[${sessionId}] judge-1: ${requiresKnowledge ? "REQUIRES_KNOWLEDGE" : "DIRECT_ANSWER"}`);
 
-        if (reliable) {
+        if (!requiresKnowledge) {
+            // Direct answer (no RAG)
+            responseText = await generateDirectAnswer(userMessage, session.intent, history);
             action = "resolve";
+            console.log(`[${sessionId}] branch: direct-answer`);
         } else {
-            // Escalate to human
-            action = "escalate_to_human";
+            // Require knowledge (RAG)
+            const retrievedDocs = await retrieve(userMessage);
+            console.log(`[${sessionId}] retrieved ${retrievedDocs.length} docs`);
+
+            // Judge 2 — RAG reliability
+            const reliable = await judgeReliability(userMessage, retrievedDocs);
+            console.log(`[${sessionId}] judge-2: ${reliable ? "RELIABLE" : "NOT_RELIABLE"}`);
+
+            if (reliable) {
+                // Branch B2a: Generated output (RAG)
+                responseText = await generateWithContext(userMessage, retrievedDocs, history);
+                action = "resolve";
+                console.log(`[${sessionId}] branch: generated-output`);
+            } else {
+                // Branch B2b: Escalate to human
+                responseText =
+                    "I'm sorry, I don't have enough information to help with this. Let me connect you with a human agent who can assist you further.";
+                action = "escalate_to_human";
+                console.log(`[${sessionId}] branch: escalated-to-human`);
+            }
         }
     }
 
-    // --- Append to chat history ---
     history.push(new HumanMessage(userMessage));
+    history.push(new AIMessage(responseText));
     session.lastAction = action;
 
-    return { sessionId, intent: session.intent, action };
+    return { sessionId, intent: session.intent, action, response: responseText };
 }
-
-// ===========================================================================
-// Session summary (end-of-conversation structured output)
-// ===========================================================================
 
 export function buildSessionSummary(sessionId: string): SessionSummary | null {
     const session = sessions.get(sessionId);
