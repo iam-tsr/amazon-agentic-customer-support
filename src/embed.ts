@@ -5,41 +5,44 @@
  *   - embedQuery(text)    for short user queries (query embedder)
  *   - embedDocuments(texts) for reference passages/documents (passage embedder)
  *
- * The underlying model is a lazily-initialized singleton: nothing is loaded
+ * Each ONNXEmbed instance lazily initializes its model: nothing is loaded
  * until the first embedding call, so importing this module stays cheap.
  */
-import { FlagEmbedding, EmbeddingModel } from "fastembed";
+import { FlagEmbedding, EmbeddingModel, ExecutionProvider } from "fastembed";
 
-let modelPromise: Promise<FlagEmbedding> | null = null;
+export class ONNXEmbed {
+    private modelPromise: Promise<FlagEmbedding> | null = null;
 
-/** Lazily initialize the (shared) embedding model singleton. */
-function getEmbeddingModel(): Promise<FlagEmbedding> {
-    if (!modelPromise) {
-        modelPromise = FlagEmbedding.init({
-            model: EmbeddingModel.BGESmallENV15,
-            cacheDir: "local_cache",
-            showDownloadProgress: false,
-        });
+    /** Lazily initialize the embedding model. */
+    private getEmbeddingModel(): Promise<FlagEmbedding> {
+        if (!this.modelPromise) {
+            this.modelPromise = FlagEmbedding.init({
+                model: EmbeddingModel.BGESmallENV15,
+                cacheDir: "local_cache",
+                showDownloadProgress: false,
+                executionProviders: [ExecutionProvider.CPU],
+            });
+        }
+        return this.modelPromise;
     }
-    return modelPromise;
-}
 
-/** Embed a single user query using the query-side embedder. */
-export async function embedQuery(text: string): Promise<number[]> {
-    const model = await getEmbeddingModel();
-    return model.queryEmbed(text);
-}
-
-/** Embed one or more documents/passages using the passage-side embedder. */
-export async function embedDocuments(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
-    const model = await getEmbeddingModel();
-    const vectors: number[][] = [];
-    // Batches of 4 keep memory flat for large document sets.
-    for await (const batch of model.passageEmbed(texts, 4)) {
-        vectors.push(...batch);
+    /** Embed a single user query using the query-side embedder. */
+    async embedQuery(text: string): Promise<number[]> {
+        const model = await this.getEmbeddingModel();
+        return model.queryEmbed(text);
     }
-    return vectors;
+
+    /** Embed one or more documents/passages using the passage-side embedder. */
+    async embedDocuments(texts: string[]): Promise<number[][]> {
+        if (texts.length === 0) return [];
+        const model = await this.getEmbeddingModel();
+        const vectors: number[][] = [];
+        // Batches of 4 keep memory flat for large document sets.
+        for await (const batch of model.passageEmbed(texts, 4)) {
+            vectors.push(...batch);
+        }
+        return vectors;
+    }
 }
 
 // ===========================================================================
@@ -47,15 +50,16 @@ export async function embedDocuments(texts: string[]): Promise<number[][]> {
 // ===========================================================================
 
 if (import.meta.main) {
+    const embedder = new ONNXEmbed();
     const documents = [
         "Where is my Amazon order and when will it be delivered?",
         "Prime Video movies and TV shows are not playing.",
     ];
 
-    const docVectors = await embedDocuments(documents);
+    const docVectors = await embedder.embedDocuments(documents);
     console.log(`embedDocuments: ${docVectors.length} vectors, dim=${docVectors[0]?.length}`);
 
-    const queryVector = await embedQuery("query: track my package");
+    const queryVector = await embedder.embedQuery("query: track my package");
     console.log(`embedQuery:    dim=${queryVector.length}`);
 
     // A delivery question should sit closer to the order reference than to
