@@ -82,13 +82,6 @@ function getSession(sessionId: string): SessionState {
 }
 
 // Intent classification via Logistic Regression (ML model — Python subprocess)
-
-/**
- * Runs the sklearn TF-IDF + LogisticRegression model (tweet_classify.joblib)
- * as a Python3.11 subprocess and returns the predicted intent label.
- * Called after the Guardrail passes (PASS / GREETING), on every turn so that
- * the intent reflects the most recent user message.
- */
 async function classifyIntent(text: string): Promise<Intent> {
     try {
         const proc = Bun.spawn(
