@@ -1,4 +1,4 @@
-# Amazon Customer Support AI Agent & RAG Pipeline
+# Amazon Agentic Customer Support
 
 An enterprise-ready, intelligent customer support AI agent designed for e-commerce query resolution. Built with **Bun**, **LangChain**, and **FastEmbed ONNX**, the system incorporates multi-layered safety guardrails, machine learning intent classification, hybrid retrieval-augmented generation (RAG), and a dual LLM-as-a-Judge architecture to deliver reliable, context-aware responses or seamlessly escalate to human agents.
 
