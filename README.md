@@ -7,6 +7,7 @@ An enterprise-ready, intelligent customer support AI agent designed for e-commer
 ## Features & Architecture
 
 <!-- Workflow figure -->
+![System Arch](assets/system-arch.png)
 
 ### Key Highlights
 - **Layered Topic & Security Guardrails**: Fast token & regex filtering + semantic fallback protecting against out-of-scope topics, prompt injections, and jailbreaks.
