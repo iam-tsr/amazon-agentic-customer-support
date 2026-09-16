@@ -14,11 +14,8 @@ interface EvaluationResult {
 
 export interface EvaluationReport {
     total: number;
-    intentMatches: number;
-    actionMatches: number;
     intentAccuracy: number;
     actionAccuracy: number;
-    responsePassed: number;
     responseAccuracy: number;
     results: EvaluationResult[];
 }
@@ -87,11 +84,8 @@ async function evaluateResponse(expected: string | null, actual: string): Promis
 
         const report: EvaluationReport = {
             total: entries.length,
-            intentMatches: 0,
-            actionMatches: 0,
             intentAccuracy: 0,
             actionAccuracy: 0,
-            responsePassed: 0,
             responseAccuracy: 0,
             results: [],
         };
@@ -118,12 +112,12 @@ async function evaluateResponse(expected: string | null, actual: string): Promis
                     }
 
                     const intentMatch = actualIntent === entry.intent;
-                    if (intentMatch) report.intentMatches++;
+                    if (intentMatch) report.intentAccuracy++;
 
                     const actionMatch = actualAction === entry.action;
-                    if (actionMatch) report.actionMatches++;
+                    if (actionMatch) report.actionAccuracy++;
 
-                    if (await evaluateResponse(entry.response, botResponse)) report.responsePassed++;
+                    if (await evaluateResponse(entry.response, botResponse)) report.responseAccuracy++;
 
                     return {
                         index,
@@ -141,19 +135,18 @@ async function evaluateResponse(expected: string | null, actual: string): Promis
             console.log(`[eval] Progress: ${done}/${entries.length} evaluated`);
         }
 
-        report.intentAccuracy = report.total > 0 ? (report.intentMatches / report.total) * 100 : 0;
-        report.actionAccuracy = report.total > 0 ? (report.actionMatches / report.total) * 100 : 0;
-        report.responseAccuracy = report.total > 0 ? (report.responsePassed / report.total) * 100 : 0;
-
         const summary =
             `\n` +
             `═══ Evaluation Report ═══\n` +
             `Total queries   : ${report.total}\n` +
-            `Intent accuracy  : ${report.intentAccuracy.toFixed(1)}% (${report.intentMatches}/${report.total})\n` +
-            `Action accuracy  : ${report.actionAccuracy.toFixed(1)}% (${report.actionMatches}/${report.total})\n` +
-            `Response accuracy: ${report.responseAccuracy.toFixed(1)}% (${report.responsePassed}/${report.total})\n\n` +
+            `Intent accuracy  : ${report.intentAccuracy.toFixed(1)}% (${report.intentAccuracy}/${report.total})\n` +
+            `Action accuracy  : ${report.actionAccuracy.toFixed(1)}% (${report.actionAccuracy}/${report.total})\n` +
+            `Response accuracy: ${report.responseAccuracy.toFixed(1)}% (${report.responseAccuracy}/${report.total})\n\n` +
             `═══════════════════════════`;
 
         console.log(summary);
+        // Save the report to a JSON file
+        const reportFilePath = new URL("./tests/evaluation_report.json", import.meta.url);
+        await Bun.write(reportFilePath, JSON.stringify(report, null, 2));
         return report;
     }
