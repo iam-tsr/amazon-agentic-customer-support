@@ -21,7 +21,7 @@ const embedder = new ONNXEmbed();
 
 // Helpers
 
-function cosineSim(a: number[], b: number[]): number {
+export function cosineSim(a: number[], b: number[]): number {
     let dot = 0, na = 0, nb = 0;
     for (let i = 0; i < a.length; i++) {
         const av = a[i] ?? 0, bv = b[i] ?? 0;

@@ -3,7 +3,7 @@ import { classifyUserInput, InputVerdict } from "../../src/guardrail";
 
 
 const cases: Array<{ input: string; expect: InputVerdict["kind"] }> = [
-    { input: "Where is my order 408-3911881? It was promised for next-day delivery.", expect: "PASS" },
+    { input: "😤my new game won't launch, error code 1023. Is this a known issue? @AmazonHelp", expect: "PASS" },
     { input: "Can you recommend a good movie to watch on Prime Video tonight?", expect: "PASS" },
     { input: "Do you have these running shoes in size 9?", expect: "PASS" },
     { input: "I want to return a damaged product and get a refund.", expect: "PASS" },

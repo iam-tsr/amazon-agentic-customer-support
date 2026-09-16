@@ -24,7 +24,8 @@ try {
     console.error("[config] LLM client configuration error:", err);
     process.exit(1);
 }
-const openai = new ChatOpenAI({
+
+export const openai = new ChatOpenAI({
     openAIApiKey: OPENAI_API_KEY,
     configuration: {
         baseURL: OPENAI_API_BASE_URL,
@@ -33,7 +34,6 @@ const openai = new ChatOpenAI({
     temperature: 0.3,
     maxRetries: 2,
 });
-
 
 // In-memory vector store (loaded once at startup)
 type QueryEntry = { query: string; response: string };
@@ -57,7 +57,7 @@ export async function loadDatasetIntoVectorStore(): Promise<void> {
 
 // Session state
 export type Intent = "complaint" | "question" | "positive" | "other" | "unknown";
-export type Action = "resolve" | "escalate_to_human";
+export type Action = "resolve" | "escalated_to_human";
 
 export interface SessionState {
     /** Full chat history (system + human + AI messages) */
@@ -289,7 +289,7 @@ export async function runPipeline(userMessage: string, sessionId: string): Promi
                 // Branch B2b: Escalate to human
                 responseText =
                     "I'm sorry, I don't have enough information to help with this. Let me connect you with a human agent who can assist you further.";
-                action = "escalate_to_human";
+                action = "escalated_to_human";
                 console.log(`[${sessionId}] branch: escalated-to-human`);
             }
         }

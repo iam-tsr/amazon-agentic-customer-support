@@ -5,6 +5,7 @@ import {
     sessions,
     vectorStore,
 } from "./src/core.js";
+import { runEvaluation, EvaluationReport } from "./tests/test_eval.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? "0.0.0.0";
@@ -23,14 +24,12 @@ function errorResponse(message: string, status = 400): Response {
     return jsonResponse({ error: message }, status);
 }
 
-// ===========================================================================
 // Request router
-// ===========================================================================
 
 async function handleRequest(req: Request): Promise<Response> {
     const url = new URL(req.url);
 
-    // --- GET /health ---
+    // GET /health
     if (req.method === "GET" && url.pathname === "/health") {
         return jsonResponse({
             status: "ok",
@@ -39,12 +38,12 @@ async function handleRequest(req: Request): Promise<Response> {
         });
     }
 
-    // --- GET /sessions ---
+    // GET /sessions
     if (req.method === "GET" && url.pathname === "/sessions") {
         return jsonResponse({ sessions: [...sessions.keys()] });
     }
 
-    // --- POST /chat ---
+    // POST /chat
     if (req.method === "POST" && url.pathname === "/chat") {
         let body: { sessionId?: string; message?: string };
         try {
@@ -71,7 +70,7 @@ async function handleRequest(req: Request): Promise<Response> {
         }
     }
 
-    // --- POST /end-chat ---
+    // POST /end-chat
     if (req.method === "POST" && url.pathname === "/end-chat") {
         let body: { sessionId?: string };
         try {
@@ -97,20 +96,33 @@ async function handleRequest(req: Request): Promise<Response> {
         return jsonResponse(summary);
     }
 
-    // --- DELETE /sessions/:id ---
+    // DELETE /sessions/:id
     if (req.method === "DELETE" && url.pathname.startsWith("/sessions/")) {
         const id = url.pathname.slice("/sessions/".length);
         const deleted = sessions.delete(id);
         return jsonResponse({ deleted, sessionId: id });
     }
 
+    // POST /test — trigger evaluation test
+    if (req.method === "POST" && url.pathname === "/test") {
+        let body: { concurrency?: number; limit?: number };
+        try {
+            body = await req.json() as { concurrency?: number; limit?: number };
+            const concurrency = body.concurrency ?? 3;
+            const limit = body.limit;
+            const report: EvaluationReport = await runEvaluation(concurrency, limit);
+            return jsonResponse(report, 200);
+        } catch (err) {
+            console.error("[test] Evaluation failed:", err);
+            return errorResponse("Evaluation test failed", 500);
+        }
+    }
+
     return errorResponse("Not found", 404);
 }
 
-// ===========================================================================
-// Startup (like FastAPI lifespan)
-// ===========================================================================
 
+// Startup
 console.log("=".repeat(60));
 console.log("  Amazon Customer Support Agent");
 console.log("=".repeat(60));
@@ -132,6 +144,7 @@ console.log(`\n✅ Server listening on http://${HOST}:${PORT}`);
 console.log("\nEndpoints:");
 console.log("  POST   /chat         { sessionId?: string, message: string }");
 console.log("  POST   /end-chat     { sessionId: string }");
+console.log("  POST   /test         { limit?: number of test entries to evaluate }");
 console.log("  GET    /health");
 console.log("  GET    /sessions");
 console.log("  DELETE /sessions/:id\n");

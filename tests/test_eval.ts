@@ -1,4 +1,4 @@
-import { runPipeline } from "../src/core.js";
+import { runPipeline, openai } from "../src/core.js";
 import { cosineSim } from "../src/guardrail.js";
 import { ONNXEmbed } from "../src/embed.js";
 
@@ -67,102 +67,93 @@ async function evaluateResponse(expected: string | null, actual: string): Promis
         return true; // No expected response, consider it passed
     }
 
-    if (!actual.trim()) {
+    try {
+        const [expectedEmbedding, actualEmbedding] = await Promise.all([
+            embedding.embedQuery(expected),
+            embedding.embedQuery(actual),
+        ]);
+
+        const similarity = cosineSim(expectedEmbedding, actualEmbedding);
+        // console.log(similarity)
+        return similarity >= 0.8; // Consider it passed if similarity is above threshold
+    } catch (error) {
+        console.error("Error evaluating response:", error);
         return false;
     }
+}
 
-    const [expectedEmbedding, actualEmbedding] = await Promise.all([
-        embedding.embedQuery(expected),
-        embedding.embedQuery(actual),
-    ]);
+    export async function runEvaluation(concurrency: number, limit?: number): Promise<EvaluationReport> {
+        const entries = await loadTestDataset(limit);
 
-    if (expectedEmbedding.length === 0 || actualEmbedding.length === 0) {
-        return false;
+        const report: EvaluationReport = {
+            total: entries.length,
+            intentMatches: 0,
+            actionMatches: 0,
+            intentAccuracy: 0,
+            actionAccuracy: 0,
+            responsePassed: 0,
+            responseAccuracy: 0,
+            results: [],
+        };
+
+        for (let i = 0; i < entries.length; i += concurrency) {
+            const batch = entries.slice(i, i + concurrency);
+            const batchResults = await Promise.all(
+                batch.map(async (entry, batchIndex) => {
+                    const index = i + batchIndex;
+                    const sessionId = `eval_${index}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+                    let actualIntent = "unknown";
+                    let actualAction: "resolve" | "escalated_to_human" = "resolve";
+                    let botResponse = "";
+
+                    try {
+                        const result = await runPipeline(entry.query, sessionId);
+                        actualIntent = result.intent;
+                        actualAction = result.action;
+                        botResponse = result.response;
+                    } catch (err: any) {
+                        console.error(`[eval] Pipeline failed for entry ${index}:`, err.message);
+                        process.exit(1);
+                    }
+
+                    const intentMatch = actualIntent === entry.intent;
+                    if (intentMatch) report.intentMatches++;
+
+                    const actionMatch = actualAction === entry.action;
+                    if (actionMatch) report.actionMatches++;
+
+                    if (await evaluateResponse(entry.response, botResponse)) report.responsePassed++;
+
+                    return {
+                        index,
+                        query: entry.query,
+                        response: botResponse,
+                        intentMatch,
+                        actionMatch
+                    };
+                }),
+            );
+
+            report.results.push(...batchResults);
+
+            const done = Math.min(i + concurrency, entries.length);
+            console.log(`[eval] Progress: ${done}/${entries.length} evaluated`);
+        }
+
+        report.intentAccuracy = report.total > 0 ? (report.intentMatches / report.total) * 100 : 0;
+        report.actionAccuracy = report.total > 0 ? (report.actionMatches / report.total) * 100 : 0;
+        report.responseAccuracy = report.total > 0 ? (report.responsePassed / report.total) * 100 : 0;
+
+        const summary =
+            `\n` +
+            `═══ Evaluation Report ═══\n` +
+            `Total queries   : ${report.total}\n` +
+            `Intent accuracy  : ${report.intentAccuracy.toFixed(1)}% (${report.intentMatches}/${report.total})\n` +
+            `Action accuracy  : ${report.actionAccuracy.toFixed(1)}% (${report.actionMatches}/${report.total})\n` +
+            `Response accuracy: ${report.responseAccuracy.toFixed(1)}% (${report.responsePassed}/${report.total})\n\n` +
+            `═══════════════════════════`;
+
+        console.log(summary);
+        return report;
     }
-
-    const similarity = cosineSim(expectedEmbedding, actualEmbedding);
-    return similarity >= 0.8; // Consider it passed if similarity is above threshold
-}
-
-export async function runEvaluation(concurrency: number, limit?: number): Promise<EvaluationReport> {
-    const entries = await loadTestDataset(limit);
-
-    const report: EvaluationReport = {
-        total: entries.length,
-        intentMatches: 0,
-        actionMatches: 0,
-        intentAccuracy: 0,
-        actionAccuracy: 0,
-        responsePassed: 0,
-        responseAccuracy: 0,
-        results: [],
-    };
-
-    for (let i = 0; i < entries.length; i += concurrency) {
-        const batch = entries.slice(i, i + concurrency);
-        const batchResults = await Promise.all(
-            batch.map(async (entry, batchIndex) => {
-                const index = i + batchIndex;
-                const sessionId = `eval_${index}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-                let actualIntent = "unknown";
-                let actualAction: "resolve" | "escalated_to_human" = "resolve";
-                let botResponse = "";
-
-                try {
-                    const result = await runPipeline(entry.query, sessionId);
-                    actualIntent = result.intent;
-                    actualAction = result.action;
-                    botResponse = result.response;
-                } catch (err) {
-                    console.error(`[eval] Pipeline failed for entry ${index}:`, err);
-                }
-
-                const intentMatch = actualIntent === entry.intent;
-                if (intentMatch) report.intentMatches++;
-
-                const actionMatch = actualAction === entry.action;
-                if (actionMatch) report.actionMatches++;
-
-                if (await evaluateResponse(entry.response, botResponse)) report.responsePassed++;
-
-                return {
-                    index,
-                    query: entry.query,
-                    response: botResponse,
-                    intentMatch,
-                    actionMatch
-                };
-            }),
-        );
-
-        report.results.push(...batchResults);
-
-        const done = Math.min(i + concurrency, entries.length);
-        console.log(`[eval] Progress: ${done}/${entries.length} evaluated`);
-    }
-
-    report.intentAccuracy = report.total > 0 ? (report.intentMatches / report.total) * 100 : 0;
-    report.actionAccuracy = report.total > 0 ? (report.actionMatches / report.total) * 100 : 0;
-    report.responseAccuracy = report.total > 0 ? (report.responsePassed / report.total) * 100 : 0;
-
-    const summary =
-        `\n` +
-        `═══ Evaluation Report ═══\n` +
-        `Total queries   : ${report.total}\n` +
-        `Intent accuracy  : ${report.intentAccuracy.toFixed(1)}% (${report.intentMatches}/${report.total})\n` +
-        `Action accuracy  : ${report.actionAccuracy.toFixed(1)}% (${report.actionMatches}/${report.total})\n` +
-        `Response accuracy: ${report.responseAccuracy.toFixed(1)}% (${report.responsePassed}/${report.total})\n\n` +
-        `═══════════════════════════`;
-
-    console.log(summary);
-    return report;
-}
-
-if (import.meta.main) {
-    const actual = "You're very welcome! We're thrilled to hear that you're enjoying your new item. Please don't hesitate to reach out if you need anything else in the future. Have a wonderful day!"
-    const expected = "Thank you for your kind words about our packaging. We're glad you enjoyed the experience. If you have any other questions, feel free to reach out."
-
-    const passed = await evaluateResponse(expected, actual);
-    console.log(`Response evaluation passed: ${passed}`);
-}
