@@ -104,7 +104,7 @@ Send customer queries and receive contextually grounded answers.
 ---
 
 ### 2. Run Automated Evaluation Test
-Triggers evaluation against test datasets (`test_data.jsonl`) to benchmark intent accuracy, action accuracy, and response quality.
+Triggers evaluation against test datasets to benchmark intent accuracy, action accuracy, and response quality.
 
 - **Endpoint**: `POST /test`
 - **Request Body**:
