@@ -11,7 +11,7 @@ An enterprise-ready, intelligent customer support AI agent designed for e-commer
 
 ### Key Highlights
 - **Layered Topic & Security Guardrails**: Fast token & regex filtering + semantic fallback protecting against out-of-scope topics, prompt injections, and jailbreaks.
-- **ML Intent Classifier**: Python-powered TF-IDF + Logistic Regression pipeline classifying queries into `complaint`, `question`, `positive`, and `other`.
+- **ML Intent Classifier**: Classification model sourced from [`lucashmateo/customer-support-twiter-analysis`](https://huggingface.co/lucashmateo/customer-support-twiter-analysis) - converted to ONNX for TS inference, classifying queries into `complaint`, `question`, `positive`, and `other`.
 - **Dual LLM-as-a-Judge Evaluation**:
   - **Judge 1 (Need for Knowledge)**: Evaluates whether a query can be answered directly using conversational memory or requires external domain knowledge.
   - **Judge 2 (Reliability Assessment)**: Checks if retrieved knowledge base articles accurately answer the customer's query before generating responses, preventing hallucinations.
@@ -25,7 +25,6 @@ An enterprise-ready, intelligent customer support AI agent designed for e-commer
 
 ### Prerequisites
 - **[Bun](https://bun.sh/)** (`v1.1+` or `v1.4+`)
-- **Python 3.11+** (for ML intent classification)
 - Access to an OpenAI-compatible LLM endpoint
 
 ### 1. Clone the Repository
@@ -39,11 +38,6 @@ cd amazon-customer-support-bot
 **Bun dependencies:**
 ```bash
 bun install
-```
-
-**Python dependencies (for intent classification):**
-```bash
-pip install joblib scikit-learn
 ```
 
 ### 3. Configure Environment Variables
