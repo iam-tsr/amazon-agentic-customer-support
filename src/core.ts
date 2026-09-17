@@ -82,24 +82,6 @@ function getSession(sessionId: string): SessionState {
     return sessions.get(sessionId)!;
 }
 
-// Intent classification via Logistic Regression (ML model — Python subprocess)
-// async function classifyIntent(text: string): Promise<Intent> {
-//     try {
-//         const proc = Bun.spawn(
-//             ["python3.11", "src/intent_classify.py", text],
-//             { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" }
-//         );
-//         const output = await new Response(proc.stdout).text();
-//         await proc.exited;
-//         const label = output.trim().toLowerCase() as Intent;
-//         const valid: Intent[] = ["complaint", "question", "positive", "other"];
-//         return valid.includes(label) ? label : "other";
-//     } catch (err) {
-//         console.warn("[intent] ML classification failed, defaulting to 'other':", err);
-//         return "other";
-//     }
-// }
-
 /**
  * Judge 1 — decide whether the query can be answered directly or
  * requires retrieval from the knowledge base.
